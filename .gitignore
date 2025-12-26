@@ -1,10 +1,68 @@
+# Environment variables
+.env
+*.env
+
+# Data files (too large for Git)
 *.csv
 *.json
+*.xlsx
+*.xls
 *.doc
 *.docx
+*.pdf
+*.zip
+*.tar
+*.gz
+*.bz2
+
+# Specific large files to exclude
+arctic_pricing*.csv
+master_tour_data.csv
+build_report.csv
+Tours-Export-*.csv
+acf-export-*.json
+website_export.csv
+unified_tours.json
+*.json:Zone.Identifier
+*.csv:Zone.Identifier
+*.doc:Zone.Identifier
+*.docx:Zone.Identifier
+
+# Output directories
 data/
 output/
 archive/
-New Itineraries/
-Old Itineraries/
+logs/
+markdown/
+New\ Itineraries/
+Old\ Itineraries/
 itinerary_docs/
+outline_final_import/
+outline_import/
+
+# Database
+*.db
+*.sqlite3
+
+# Credentials
+*.key
+*.pem
+*.crt
+config.json
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Logs
+*.log
