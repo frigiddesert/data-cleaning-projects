@@ -1,0 +1,28 @@
+name: Vibe Check
+on: [push]
+
+jobs:
+  update-board:
+    runs-on: ubuntu-latest
+    permissions:
+      repository-projects: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+      
+      - name: Run Vibe Manager
+        env:
+          # Use Secrets for Keys
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Use Vars for Config (or hardcode)
+          GH_USER: "frigiddesert" 
+          GH_PROJECT_NUMBER: "9" 
+          AI_MODEL_NAME: "gpt-5.1-mini"
+          # We need a token that can write to your User Project
+          # The default GITHUB_TOKEN often cannot write to User Projects, only Repo Projects.
+          # You usually need a PAT stored as a secret.
+          GH_TOKEN: ${{ secrets.VIBE_PAT_TOKEN }} 
+        run: |
+          curl -s https://gist.githubusercontent.com/frigiddesert/cfd7e5cd1b32ec2bb7c1b21d1747be6b/raw/53402051294cbf828c9690eb5941ed3e6aeec9ae/vibe_manager.py | python3
