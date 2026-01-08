@@ -39,6 +39,8 @@ Old\ Itineraries/
 itinerary_docs/
 outline_final_import/
 outline_import/
+outline_preview/
+datasources/
 
 # Database
 *.db
