@@ -8,39 +8,63 @@ on:
   workflow_dispatch:
     # Allows manual trigger from GitHub Actions tab
 
+env:
+  OUTLINE_API_URL: ${{ secrets.OUTLINE_API_URL }}
+  OUTLINE_API_KEY: ${{ secrets.OUTLINE_API_KEY }}
+  OUTLINE_DAY_TOURS_DOC_ID: ${{ secrets.OUTLINE_DAY_TOURS_DOC_ID }}
+  OUTLINE_MD_TOURS_DOC_ID: ${{ secrets.OUTLINE_MD_TOURS_DOC_ID }}
+
 jobs:
   sync-arctic-to-outline:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
-      - name: Trigger Arctic Sync Worker
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dependencies
         run: |
-          echo "🚀 Triggering Arctic availability sync..."
-          curl -s -X GET "https://arctic-sync.eric-c5f.workers.dev/sync" \
-            -H "Accept: application/json" \
-            -o sync-result.json
+          python -m pip install --upgrade pip
+          pip install requests python-dotenv
 
-          echo "📊 Sync completed. Results:"
-          cat sync-result.json | jq '.'
+      - name: Run Arctic Sync
+        run: |
+          echo "🚀 Starting Arctic availability sync..."
+          echo "Timezone: America/Denver"
+          echo "Processing ALL multi-day tours (day tours skipped)"
+          echo ""
 
-          # Check if sync was successful
-          UPDATED=$(cat sync-result.json | jq -r '.updated')
-          FAILED=$(cat sync-result.json | jq -r '.failed')
+          python sync_arctic_availability.py 2>&1 | tee sync-output.log
 
           echo ""
-          echo "✅ Updated: $UPDATED tours"
-          echo "❌ Failed: $FAILED tours"
+          echo "✅ Arctic sync completed!"
 
-          if [ "$FAILED" -gt 0 ]; then
-            echo "⚠️  Warning: Some tours failed to sync"
-            exit 1
+      - name: Check sync results
+        run: |
+          # Extract summary from output
+          echo "📊 Sync Summary:"
+          grep -E "SYNC COMPLETE|updated|failed|skipped" sync-output.log || echo "Summary not found in output"
+
+          # Check if there were failures
+          if grep -q "failed" sync-output.log; then
+            FAILED_COUNT=$(grep -oP '\d+(?= failed)' sync-output.log | head -1)
+            if [ "$FAILED_COUNT" -gt 0 ]; then
+              echo "⚠️  Warning: $FAILED_COUNT tours failed to sync"
+              echo "Check the sync-output.log artifact for details"
+            fi
           fi
 
-      - name: Upload sync results
+      - name: Upload sync log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: arctic-sync-results-${{ github.run_number }}
-          path: sync-result.json
+          name: arctic-sync-log-${{ github.run_number }}
+          path: sync-output.log
           retention-days: 30
