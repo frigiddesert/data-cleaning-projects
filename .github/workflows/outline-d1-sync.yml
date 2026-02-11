@@ -20,7 +20,8 @@ jobs:
           echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo ""
 
-          RESPONSE=$(curl -s -X POST https://outline-d1-sync.eric-c5f.workers.dev/api/sync-now)
+          RESPONSE=$(curl -s -X POST https://outline-d1-sync.eric-c5f.workers.dev/api/sync-now \
+            -H "X-API-Key: ${{ secrets.D1_SYNC_API_KEY }}")
           echo "$RESPONSE" | jq '.'
 
           # Check if sync was successful

@@ -55,11 +55,23 @@ export default {
     const corsHeaders = {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
     };
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders });
+    }
+
+    // Protect write endpoints with API key
+    if (request.method === 'POST' && path === '/api/sync-now') {
+      const apiKey = request.headers.get('X-API-Key');
+      if (!env.API_KEY || apiKey !== env.API_KEY) {
+        return jsonResponse(
+          { error: 'Unauthorized' },
+          { ...corsHeaders, 'WWW-Authenticate': 'X-API-Key' },
+          401
+        );
+      }
     }
 
     try {

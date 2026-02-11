@@ -4,3 +4,5 @@ dist/
 *.log
 .env
 .dev.vars
+websiteimages/
+websiteimages/
