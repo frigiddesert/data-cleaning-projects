@@ -175,6 +175,10 @@ function extractSection(text: string, heading: string): string | null {
   // Remove ARCTIC_SYNC sections (those are live data, not stored in D1)
   content = content.replace(/<!-- ARCTIC_SYNC:.*? -->[\s\S]*?<!-- \/ARCTIC_SYNC -->/g, '');
 
+  // Remove CONTENT placeholder tags (but keep the content between them)
+  content = content.replace(/<!-- CONTENT:\w+ -->\s*/g, '');
+  content = content.replace(/\s*<!-- \/CONTENT -->/g, '');
+
   return content.trim() || null;
 }
 
