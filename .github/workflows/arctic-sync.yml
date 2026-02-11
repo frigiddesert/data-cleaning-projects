@@ -1,0 +1,46 @@
+name: Arctic Sync Daily
+
+on:
+  schedule:
+    # Runs daily at 6:00 AM UTC (11 PM MST / 12 AM MDT)
+    - cron: '0 6 * * *'
+
+  workflow_dispatch:
+    # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  sync-arctic-to-outline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Trigger Arctic Sync Worker
+        run: |
+          echo "🚀 Triggering Arctic availability sync..."
+          curl -s -X GET "https://arctic-sync.eric-c5f.workers.dev/sync" \
+            -H "Accept: application/json" \
+            -o sync-result.json
+
+          echo "📊 Sync completed. Results:"
+          cat sync-result.json | jq '.'
+
+          # Check if sync was successful
+          UPDATED=$(cat sync-result.json | jq -r '.updated')
+          FAILED=$(cat sync-result.json | jq -r '.failed')
+
+          echo ""
+          echo "✅ Updated: $UPDATED tours"
+          echo "❌ Failed: $FAILED tours"
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo "⚠️  Warning: Some tours failed to sync"
+            exit 1
+          fi
+
+      - name: Upload sync results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arctic-sync-results-${{ github.run_number }}
+          path: sync-result.json
+          retention-days: 30
