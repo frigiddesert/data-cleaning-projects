@@ -47,6 +47,7 @@ OUTLINE_COLLECTION_ID = os.getenv('OUTLINE_COLLECTION_ID', '')
 
 MASTER_LIST_PATH = Path(__file__).parent / 'tour_master_list.csv'
 BACKUPS_DIR = Path(__file__).parent / 'backups'
+WP_DATA_PATH = Path(__file__).parent / 'archive' / 'phase1_data' / 'website_tours_clean.json'
 
 # Rate limiting
 API_DELAY_MS = 500
@@ -157,6 +158,58 @@ def get_master_list_by_arctic_id() -> Dict[int, List[dict]]:
                 by_arctic[aid] = []
             by_arctic[aid].append(t)
     return by_arctic
+
+
+# ==========================================
+# WORDPRESS DATA HANDLING
+# ==========================================
+
+def load_wordpress_data() -> Dict[str, dict]:
+    """Load WordPress tour data indexed by slug."""
+    if not WP_DATA_PATH.exists():
+        print(f"Warning: WordPress data not found: {WP_DATA_PATH}")
+        return {}
+
+    with open(WP_DATA_PATH, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+
+    tours = data.get('tours', [])
+    return {t.get('slug', ''): t for t in tours if isinstance(t, dict) and t.get('slug')}
+
+
+def get_wp_slug_from_permalink(permalink: str) -> str:
+    """Extract slug from WordPress permalink."""
+    # https://rimtours.com/tours/white-rim-4-day/ -> white-rim-4-day
+    if not permalink:
+        return ''
+    slug = permalink.rstrip('/').split('/')[-1]
+    return slug
+
+
+def format_sidebar_data(wp_tour: dict) -> dict:
+    """Format WordPress tour data for sidebar fields."""
+    skill_level = wp_tour.get('skill_level', '')
+
+    # Format skill level (pipe-separated -> comma-separated)
+    skill_formatted = ', '.join(skill_level.split('|')) if skill_level else 'Contact us'
+
+    # Format season
+    season = wp_tour.get('season', '')
+    season_formatted = ', '.join(season.split('|')) if season else 'Contact us'
+
+    # Determine EBikes OK
+    ebikes_ok = 'Yes' if 'ebike' in skill_level.lower() else 'No'
+
+    return {
+        'region': wp_tour.get('region', '').replace('|', ', ') or 'Contact us',
+        'departs': wp_tour.get('departs', '') or 'Contact us',
+        'distance': wp_tour.get('distance', '') or 'Contact us',
+        'duration': wp_tour.get('duration', '') or 'Contact us',
+        'style': wp_tour.get('style', '') or 'Contact us',
+        'season': season_formatted,
+        'skill_level': skill_formatted,
+        'ebikes_ok': ebikes_ok,
+    }
 
 
 # ==========================================
@@ -405,14 +458,44 @@ DOCUMENT_TEMPLATE = """# {title}
 
 ---
 
-<!-- ARCTIC_SYNC:details -->
+<!-- SIDEBAR_SYNC -->
 ## Tour Details
 | | |
 |---|---|
+| **Region** | {region} |
+| **Departs** | {departs} |
+| **Distance** | {distance} |
 | **Duration** | {duration} |
+| **Style** | {style} |
+| **Season** | {season} |
+| **Skill Level** | {skill_level} |
+| **EBikes OK** | {ebikes_ok} |
 | **Group Size** | {group_size} |
 | **Book By** | {cutoff} |
-<!-- /ARCTIC_SYNC -->
+<!-- /SIDEBAR_SYNC -->
+
+---
+
+## Meeting Info
+<!-- CONTENT:meeting_info -->
+| | |
+|---|---|
+| **Time** | _Enter meeting time_ |
+| **Location** | _Enter meeting location_ |
+| **End Time** | _Expected return time_ |
+<!-- /CONTENT -->
+
+---
+
+## Difficulty & Terrain
+<!-- CONTENT:difficulty -->
+| | |
+|---|---|
+| **Tour Rating** | _e.g., Moderate/Intermediate_ |
+| **Terrain** | _e.g., Doubletrack 4x4 trail, exposed rock_ |
+| **Technical Difficulty** | _e.g., Moderately technical with short intermediate segments_ |
+| **Altitude** | _e.g., 4,500ft to 6,000ft_ |
+<!-- /CONTENT -->
 
 ---
 
@@ -434,10 +517,43 @@ DOCUMENT_TEMPLATE = """# {title}
 
 {itinerary_section}
 
-## A/B Testing
-<!-- AB_TEST:headline -->
-_No active A/B tests._
-<!-- /AB_TEST -->
+## Marketing Copy Variations
+
+### Headings
+<!-- CONTENT:headings -->
+| Variation | Style | Status |
+|-----------|-------|--------|
+| _Enter headline variation 1_ | _Style name_ | Draft |
+| _Enter headline variation 2_ | _Style name_ | Draft |
+<!-- /CONTENT -->
+
+### Subheadings
+<!-- CONTENT:subheadings -->
+| Variation | Style | Status |
+|-----------|-------|--------|
+| _Enter subheading variation 1_ | _Style name_ | Draft |
+<!-- /CONTENT -->
+
+### Photo Overlay Text
+<!-- CONTENT:photo_overlay -->
+| Text | Placement | Status |
+|------|-----------|--------|
+| _Enter overlay text 1_ | _Hero image_ | Draft |
+<!-- /CONTENT -->
+
+### Call to Action
+<!-- CONTENT:cta -->
+| CTA Text | Button Style | Status |
+|----------|--------------|--------|
+| _Enter CTA text_ | _Primary/Secondary_ | Draft |
+<!-- /CONTENT -->
+
+### Full Description Variations
+<!-- CONTENT:description_variations -->
+| Description | Style | Selected | Date |
+|-------------|-------|----------|------|
+| _Full marketing description variation_ | _e.g., David Ogilvy_ | ☐ | |
+<!-- /CONTENT -->
 
 ---
 
@@ -526,41 +642,50 @@ def format_pricing_table(pricing: dict, is_multiday: bool) -> str:
 
 
 def format_schedule_section(schedule: dict, is_multiday: bool = True) -> str:
-    """Format 2026 schedule section."""
+    """Format schedule section with future dates and recent past."""
     # Always include markers for multi-day tours so sync can fill them in later
     if not is_multiday:
         return ""
 
     lines = ["<!-- ARCTIC_SYNC:schedule -->"]
-    lines.append("## 2026 Schedule\n")
+    lines.append("## Scheduled Dates\n")
 
-    def format_date_row(d):
+    def format_date_row(d, is_past=False):
         start = d['start_date']
-        spots = d.get('spots_available', '?')
-        total = d.get('spots_total', '?')
-        status = "Available" if spots and spots > 0 else "Full"
+        spots = d.get('spots_available', 0)
+        total = d.get('spots_total', 0)
+        guests = d.get('guests', 0)
+
+        if is_past:
+            status = f"{guests} guests"
+        elif spots and spots > 0:
+            status = "Available"
+        else:
+            status = "Full"
+
         return f"| {start} | {spots}/{total} | {status} |"
 
-    has_dates = schedule and schedule.get('total', 0) > 0
+    has_future = schedule and schedule.get('total_future', 0) > 0
+    has_past = schedule and schedule.get('total_recent', 0) > 0
 
-    if has_dates and schedule.get('spring'):
-        lines.append("### Spring Season")
+    if has_future:
+        lines.append("### Upcoming")
         lines.append("| Date | Spots | Status |")
         lines.append("|------|-------|--------|")
-        for d in schedule['spring']:
+        for d in schedule.get('future', []):
             lines.append(format_date_row(d))
         lines.append("")
 
-    if has_dates and schedule.get('fall'):
-        lines.append("### Fall Season")
-        lines.append("| Date | Spots | Status |")
+    if has_past:
+        lines.append("### Recent (Past 3 Months)")
+        lines.append("| Date | Spots | Guests |")
         lines.append("|------|-------|--------|")
-        for d in schedule['fall']:
-            lines.append(format_date_row(d))
+        for d in schedule.get('recent_past', []):
+            lines.append(format_date_row(d, is_past=True))
         lines.append("")
 
-    if not has_dates:
-        lines.append("_Schedule dates coming soon. Run `sync schedule` to update._")
+    if not has_future and not has_past:
+        lines.append("_No scheduled dates. Run `sync schedule` to update._")
         lines.append("")
 
     lines.append("<!-- /ARCTIC_SYNC -->")
@@ -611,6 +736,22 @@ def migrate_document(
     pricing = arctic.get_trip_pricing_summary(arctic_id)
     is_multiday = master.get('is_multiday', '').upper() == 'YES'
 
+    # Get WordPress sidebar data
+    wp_data = load_wordpress_data()
+    permalink = master.get('wp_permalink', '')
+    slug = get_wp_slug_from_permalink(permalink)
+    wp_tour = wp_data.get(slug, {})
+    sidebar = format_sidebar_data(wp_tour) if wp_tour else {
+        'region': 'Contact us',
+        'departs': 'Contact us',
+        'distance': 'Contact us',
+        'duration': 'Contact us',
+        'style': 'Contact us',
+        'season': 'Contact us',
+        'skill_level': 'Contact us',
+        'ebikes_ok': 'No',
+    }
+
     # Get schedule for multi-day tours
     schedule = None
     if is_multiday:
@@ -660,6 +801,11 @@ def migrate_document(
     # Short description
     short_desc = trip_details.get('description', '')[:200] if trip_details.get('description') else "_Brief tour description._"
 
+    # Use WordPress duration if available (more readable format)
+    wp_duration = sidebar.get('duration', '')
+    if wp_duration and wp_duration != 'Contact us':
+        duration = wp_duration
+
     # Format new document
     new_text = DOCUMENT_TEMPLATE.format(
         title=new_title,
@@ -667,7 +813,14 @@ def migrate_document(
         arctic_id=arctic_id,
         wp_permalink=master.get('wp_permalink', '/tours/'),
         outline_uuid=doc_id,
+        region=sidebar['region'],
+        departs=sidebar['departs'],
+        distance=sidebar['distance'],
         duration=duration,
+        style=sidebar['style'],
+        season=sidebar['season'],
+        skill_level=sidebar['skill_level'],
+        ebikes_ok=sidebar['ebikes_ok'],
         group_size=group_size,
         cutoff=cutoff,
         pricing_section=format_pricing_table(pricing, is_multiday),
@@ -679,7 +832,7 @@ def migrate_document(
 
     result['new_title'] = new_title
     result['has_pricing'] = bool(pricing.get('pricing'))
-    result['has_schedule'] = bool(schedule and schedule.get('total', 0) > 0)
+    result['has_schedule'] = bool(schedule and schedule.get('total_future', 0) > 0)
     result['has_itinerary'] = bool(itinerary)
 
     if dry_run:
@@ -874,12 +1027,12 @@ def sync_schedule(dry_run: bool = False):
             continue
 
         if dry_run:
-            print(f"  ~ {title} ({schedule.get('total', 0)} dates)")
+            print(f"  ~ {title} ({schedule.get('total_future', 0)} dates)")
             updated += 1
         else:
             try:
                 update_outline_document(doc_id, text=new_text)
-                print(f"  + {title} ({schedule.get('total', 0)} dates)")
+                print(f"  + {title} ({schedule.get('total_future', 0)} dates)")
                 updated += 1
                 time.sleep(API_DELAY_MS / 1000)
             except Exception as e:
@@ -887,6 +1040,474 @@ def sync_schedule(dry_run: bool = False):
                 errors += 1
 
     print(f"\nUpdated: {updated}, Errors: {errors}")
+
+
+def extract_marketing_variations_from_text(text: str) -> str:
+    """Extract marketing variations table from document text (old format).
+
+    Looks for the Visual Table in the Legacy Content section.
+    Returns markdown table content or empty string.
+    """
+    # Look for the Visual Table section - capture table until next heading or code block
+    match = re.search(
+        r'#\s*1\.\s*Visual Table\s*\n+(\|.+?)(?=\n+#\s*2\.|\n+```|\Z)',
+        text, re.DOTALL
+    )
+    if match:
+        table = match.group(1).strip()
+        return table
+
+    # Try alternate format - look for Description/Style/Selected table
+    match = re.search(
+        r'(\|\s*Description\s*\|\s*Style\s*\|\s*Selected\s*\|[^\n]*\n\|[-:|\s]+\|(?:\n\|[^\n]+)+)',
+        text, re.DOTALL
+    )
+    if match:
+        return match.group(1).strip()
+
+    return ""
+
+
+def extract_legacy_content_from_text(text: str) -> str:
+    """Extract the full Legacy Content section including Visual Table, CSV, and Input Block."""
+    # Look for the Legacy Content section
+    match = re.search(
+        r'(## 📜 Legacy Content.*?)(?=\n## [^📜]|\Z)',
+        text, re.DOTALL
+    )
+    if match:
+        return match.group(1).strip()
+
+    # Try without emoji
+    match = re.search(
+        r'(## Legacy Content.*?)(?=\n## |\Z)',
+        text, re.DOTALL
+    )
+    if match:
+        return match.group(1).strip()
+
+    return ""
+
+
+def restore_marketing_variations(backup_dir: str = None, dry_run: bool = False):
+    """Restore marketing variations from backup to current documents.
+
+    Args:
+        backup_dir: Path to backup directory (defaults to earliest backup)
+        dry_run: Preview without making changes
+    """
+    print("=" * 60)
+    print(f"RESTORE MARKETING VARIATIONS {'(DRY RUN)' if dry_run else ''}")
+    print("=" * 60)
+
+    # Find backup directory
+    if backup_dir:
+        backup_path = Path(backup_dir)
+        if not backup_path.exists():
+            backup_path = BACKUPS_DIR / backup_dir
+    else:
+        # Use earliest backup (most likely to have original content)
+        backups = sorted(BACKUPS_DIR.glob('outline_*'))
+        if not backups:
+            print("ERROR: No backups found")
+            return
+        backup_path = backups[0]
+
+    print(f"Using backup: {backup_path.name}\n")
+
+    # Load manifest
+    manifest_path = backup_path / 'manifest.json'
+    if not manifest_path.exists():
+        print("ERROR: Manifest not found")
+        return
+
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+
+    restored = 0
+    skipped = 0
+    no_variations = 0
+    errors = 0
+
+    for doc_info in manifest.get('documents', []):
+        doc_id = doc_info['id']
+        title = doc_info['title']
+        filename = doc_info['filename']
+
+        # Load backup file
+        backup_file = backup_path / filename
+        if not backup_file.exists():
+            continue
+
+        with open(backup_file, 'r', encoding='utf-8') as f:
+            backup_doc = json.load(f)
+
+        backup_text = backup_doc.get('text', '')
+
+        # Extract marketing variations from backup
+        variations = extract_marketing_variations_from_text(backup_text)
+        if not variations:
+            no_variations += 1
+            continue
+
+        # Fetch current document
+        current_doc = get_outline_document(doc_id)
+        if not current_doc:
+            errors += 1
+            continue
+
+        current_text = current_doc.get('text', '')
+
+        # Check if document has Marketing Copy Variations section
+        has_marketing_section = '## Marketing Copy Variations' in current_text
+        has_variations_marker = '<!-- CONTENT:description_variations -->' in current_text
+
+        if not has_marketing_section:
+            skipped += 1
+            continue
+
+        # Build new variations section with the restored table
+        full_description_section = f"""### Full Description Variations
+<!-- CONTENT:description_variations -->
+
+{variations}
+
+<!-- /CONTENT -->
+
+---"""
+
+        if has_variations_marker:
+            # Replace the existing placeholder with restored content
+            new_text = re.sub(
+                r'### Full Description Variations\s*<!-- CONTENT:description_variations -->\s*.*?\s*<!-- /CONTENT -->',
+                f"""### Full Description Variations
+<!-- CONTENT:description_variations -->
+
+{variations}
+
+<!-- /CONTENT -->""",
+                current_text,
+                flags=re.DOTALL
+            )
+        else:
+            # Add Full Description Variations section before the final sync line
+            # Look for the last --- before *Last sync:
+            if '\n---\n\n*Last sync:' in current_text:
+                new_text = current_text.replace(
+                    '\n---\n\n*Last sync:',
+                    f'\n{full_description_section}\n\n*Last sync:'
+                )
+            elif '\n---\n*Last sync:' in current_text:
+                new_text = current_text.replace(
+                    '\n---\n*Last sync:',
+                    f'\n{full_description_section}\n*Last sync:'
+                )
+            else:
+                # Just append before the last line
+                new_text = current_text.rstrip() + f'\n\n{full_description_section}'
+
+        if new_text == current_text:
+            skipped += 1
+            continue
+
+        if dry_run:
+            # Count how many rows in the variations
+            row_count = variations.count('\n|') - 1  # Subtract header row
+            print(f"  ~ {title} ({row_count} variations)")
+            restored += 1
+        else:
+            try:
+                update_outline_document(doc_id, text=new_text)
+                row_count = variations.count('\n|') - 1
+                print(f"  + {title} ({row_count} variations)")
+                restored += 1
+                time.sleep(API_DELAY_MS / 1000)
+            except Exception as e:
+                print(f"  ! {title} - {e}")
+                errors += 1
+
+    print(f"\nResults:")
+    print(f"  Restored: {restored}")
+    print(f"  Skipped (no markers/no change): {skipped}")
+    print(f"  No variations in backup: {no_variations}")
+    print(f"  Errors: {errors}")
+
+
+def restore_legacy_content(backup_dir: str = None, dry_run: bool = False):
+    """Restore full Legacy Content section (Visual Table + CSV + Input Block) from backup.
+
+    Args:
+        backup_dir: Path to backup directory (defaults to earliest backup with legacy content)
+        dry_run: Preview without making changes
+    """
+    print("=" * 60)
+    print(f"RESTORE LEGACY CONTENT {'(DRY RUN)' if dry_run else ''}")
+    print("=" * 60)
+
+    # Find backup directory
+    if backup_dir:
+        backup_path = Path(backup_dir)
+        if not backup_path.exists():
+            backup_path = BACKUPS_DIR / backup_dir
+    else:
+        # Use the backup that has legacy content (outline_20260120_160721)
+        backup_path = BACKUPS_DIR / 'outline_20260120_160721'
+        if not backup_path.exists():
+            backups = sorted(BACKUPS_DIR.glob('outline_*'))
+            if not backups:
+                print("ERROR: No backups found")
+                return
+            backup_path = backups[0]
+
+    print(f"Using backup: {backup_path.name}\n")
+
+    # Load manifest
+    manifest_path = backup_path / 'manifest.json'
+    if not manifest_path.exists():
+        print("ERROR: Manifest not found")
+        return
+
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+
+    restored = 0
+    skipped = 0
+    no_legacy = 0
+    errors = 0
+
+    for doc_info in manifest.get('documents', []):
+        doc_id = doc_info['id']
+        title = doc_info['title']
+        filename = doc_info['filename']
+
+        # Load backup file
+        backup_file = backup_path / filename
+        if not backup_file.exists():
+            continue
+
+        with open(backup_file, 'r', encoding='utf-8') as f:
+            backup_doc = json.load(f)
+
+        backup_text = backup_doc.get('text', '')
+
+        # Extract legacy content from backup
+        legacy_content = extract_legacy_content_from_text(backup_text)
+        if not legacy_content:
+            no_legacy += 1
+            continue
+
+        # Fetch current document
+        current_doc = get_outline_document(doc_id)
+        if not current_doc:
+            errors += 1
+            continue
+
+        current_text = current_doc.get('text', '')
+
+        # Check if document already has Legacy Content
+        has_legacy = '## 📜 Legacy Content' in current_text or '## Legacy Content' in current_text
+
+        # Remove any existing truncated marketing section and add full legacy content
+        # Find where to insert - before the last sync line
+        if '*Last sync:' in current_text:
+            # Remove the truncated Full Description Variations if present
+            new_text = re.sub(
+                r'### Full Description Variations\s*<!-- CONTENT:description_variations -->.*?<!-- /CONTENT -->\s*---\s*',
+                '',
+                current_text,
+                flags=re.DOTALL
+            )
+
+            # Insert legacy content before last sync (handle various formats)
+            # Try with --- first
+            new_text_attempt = re.sub(
+                r'\n---\n+(\*Last sync:)',
+                f'\n---\n\n{legacy_content}\n\n---\n\n\\1',
+                new_text
+            )
+
+            if new_text_attempt != new_text:
+                new_text = new_text_attempt
+            else:
+                # No --- before *Last sync, just insert before it
+                new_text = re.sub(
+                    r'\n\n(\*Last sync:)',
+                    f'\n\n---\n\n{legacy_content}\n\n---\n\n\\1',
+                    new_text
+                )
+                # If still no match, try with single newline
+                if new_text == current_text or '## 📜 Legacy Content' not in new_text:
+                    new_text = re.sub(
+                        r'\n(\*Last sync:)',
+                        f'\n\n---\n\n{legacy_content}\n\n---\n\n\\1',
+                        current_text
+                    )
+        else:
+            # Just append
+            new_text = current_text.rstrip() + f'\n\n---\n\n{legacy_content}'
+
+        if new_text == current_text:
+            skipped += 1
+            continue
+
+        # Check if has CSV
+        has_csv = '```csv' in legacy_content
+
+        if dry_run:
+            print(f"  ~ {title} {'(with CSV)' if has_csv else ''}")
+            restored += 1
+        else:
+            try:
+                update_outline_document(doc_id, text=new_text)
+                print(f"  + {title} {'(with CSV)' if has_csv else ''}")
+                restored += 1
+                time.sleep(API_DELAY_MS / 1000)
+            except Exception as e:
+                print(f"  ! {title} - {e}")
+                errors += 1
+
+    print(f"\nResults:")
+    print(f"  Restored: {restored}")
+    print(f"  Skipped (no change): {skipped}")
+    print(f"  No legacy content in backup: {no_legacy}")
+    print(f"  Errors: {errors}")
+
+
+def sync_sidebar(dry_run: bool = False):
+    """Sync sidebar tour details from WordPress data to Outline documents."""
+    print("=" * 60)
+    print(f"SYNC SIDEBAR DATA {'(DRY RUN)' if dry_run else ''}")
+    print("=" * 60)
+
+    # Load WordPress data
+    wp_data = load_wordpress_data()
+    if not wp_data:
+        print("ERROR: No WordPress data available")
+        return
+
+    print(f"WordPress tours loaded: {len(wp_data)}")
+
+    master_by_uuid = get_master_list_by_outline_uuid()
+    print(f"Master list entries: {len(master_by_uuid)}\n")
+
+    updated = 0
+    skipped = 0
+    errors = 0
+    no_wp_data = 0
+
+    for doc_id, master in master_by_uuid.items():
+        title = master.get('outline_title', doc_id[:8])
+
+        # Get WordPress slug from permalink
+        permalink = master.get('wp_permalink', '')
+        slug = get_wp_slug_from_permalink(permalink)
+
+        if not slug:
+            skipped += 1
+            continue
+
+        # Look up WordPress data
+        wp_tour = wp_data.get(slug)
+        if not wp_tour:
+            no_wp_data += 1
+            continue
+
+        # Fetch document
+        doc = get_outline_document(doc_id)
+        if not doc:
+            errors += 1
+            print(f"  ! {title} - could not fetch document")
+            continue
+
+        text = doc.get('text', '')
+
+        # Check if has sidebar markers (new or old format)
+        has_new_markers = '<!-- SIDEBAR_SYNC -->' in text
+        has_old_markers = '<!-- ARCTIC_SYNC:details -->' in text
+
+        if not has_new_markers and not has_old_markers:
+            # Document hasn't been migrated to any template yet
+            skipped += 1
+            continue
+
+        # Get formatted sidebar data
+        sidebar = format_sidebar_data(wp_tour)
+
+        # Also get Arctic data for group size and cutoff
+        arctic_id = master.get('arctic_id')
+        group_size = "Varies"
+        cutoff = "Contact us"
+
+        if arctic_id and arctic_id.isdigit():
+            try:
+                arctic = get_arctic_client()
+                trip_details = arctic.get_trip_details(int(arctic_id))
+                if trip_details:
+                    min_guests = trip_details.get('min_guests', 2)
+                    max_guests = trip_details.get('max_guests', 8)
+                    group_size = f"{min_guests}-{max_guests}" if min_guests and max_guests else "Varies"
+                    cutoff_days = trip_details.get('cutoff_days', 7)
+                    cutoff = f"{cutoff_days} days before departure" if cutoff_days else "Contact us"
+            except:
+                pass
+
+        # Build new sidebar section
+        new_sidebar = f"""<!-- SIDEBAR_SYNC -->
+## Tour Details
+| | |
+|---|---|
+| **Region** | {sidebar['region']} |
+| **Departs** | {sidebar['departs']} |
+| **Distance** | {sidebar['distance']} |
+| **Duration** | {sidebar['duration']} |
+| **Style** | {sidebar['style']} |
+| **Season** | {sidebar['season']} |
+| **Skill Level** | {sidebar['skill_level']} |
+| **EBikes OK** | {sidebar['ebikes_ok']} |
+| **Group Size** | {group_size} |
+| **Book By** | {cutoff} |
+<!-- /SIDEBAR_SYNC -->"""
+
+        # Replace sidebar section (handle both old and new marker formats)
+        if has_new_markers:
+            new_text = re.sub(
+                r'<!-- SIDEBAR_SYNC -->\s*## Tour Details\s*\|[^<]+<!-- /SIDEBAR_SYNC -->',
+                new_sidebar,
+                text,
+                flags=re.DOTALL
+            )
+        else:
+            # Old format: <!-- ARCTIC_SYNC:details --> ... <!-- /ARCTIC_SYNC -->
+            new_text = re.sub(
+                r'<!-- ARCTIC_SYNC:details -->\s*## Tour Details\s*.*?<!-- /ARCTIC_SYNC -->',
+                new_sidebar,
+                text,
+                flags=re.DOTALL
+            )
+
+        if new_text == text:
+            skipped += 1
+            continue
+
+        if dry_run:
+            print(f"  ~ {title}")
+            print(f"      Region: {sidebar['region']}, Departs: {sidebar['departs']}, Distance: {sidebar['distance']}")
+            updated += 1
+        else:
+            try:
+                update_outline_document(doc_id, text=new_text)
+                print(f"  + {title}")
+                updated += 1
+                time.sleep(API_DELAY_MS / 1000)
+            except Exception as e:
+                print(f"  ! {title} - {e}")
+                errors += 1
+
+    print(f"\nResults:")
+    print(f"  Updated: {updated}")
+    print(f"  Skipped (no markers/no change): {skipped}")
+    print(f"  No WordPress data: {no_wp_data}")
+    print(f"  Errors: {errors}")
 
 
 # ==========================================
@@ -907,6 +1528,7 @@ Examples:
   %(prog)s migrate                   Full migration
   %(prog)s sync pricing              Update pricing from Arctic
   %(prog)s sync schedule             Update schedules from Arctic
+  %(prog)s sync sidebar              Update tour details from WordPress
   %(prog)s rollback <backup_name>    Restore from backup
         """
     )
@@ -927,14 +1549,24 @@ Examples:
     migrate_parser.add_argument('--limit', type=int, help='Limit number of migrations')
 
     # Sync command
-    sync_parser = subparsers.add_parser('sync', help='Sync data from Arctic')
-    sync_parser.add_argument('type', choices=['pricing', 'schedule'], help='What to sync')
+    sync_parser = subparsers.add_parser('sync', help='Sync data from Arctic/WordPress')
+    sync_parser.add_argument('type', choices=['pricing', 'schedule', 'sidebar'], help='What to sync')
     sync_parser.add_argument('--dry-run', action='store_true', help='Preview without changes')
 
     # Rollback command
     rollback_parser = subparsers.add_parser('rollback', help='Restore from backup')
     rollback_parser.add_argument('backup', help='Backup directory name or path')
     rollback_parser.add_argument('--dry-run', action='store_true', help='Preview without changes')
+
+    # Restore marketing command
+    restore_mkt_parser = subparsers.add_parser('restore-marketing', help='Restore marketing variations from backup')
+    restore_mkt_parser.add_argument('--backup', help='Backup directory (default: earliest)')
+    restore_mkt_parser.add_argument('--dry-run', action='store_true', help='Preview without changes')
+
+    # Restore legacy content command
+    restore_legacy_parser = subparsers.add_parser('restore-legacy', help='Restore full Legacy Content section (table + CSV)')
+    restore_legacy_parser.add_argument('--backup', help='Backup directory (default: outline_20260120_160721)')
+    restore_legacy_parser.add_argument('--dry-run', action='store_true', help='Preview without changes')
 
     args = parser.parse_args()
 
@@ -954,8 +1586,14 @@ Examples:
             sync_pricing(dry_run=args.dry_run)
         elif args.type == 'schedule':
             sync_schedule(dry_run=args.dry_run)
+        elif args.type == 'sidebar':
+            sync_sidebar(dry_run=args.dry_run)
     elif args.command == 'rollback':
         restore_from_backup(args.backup, dry_run=args.dry_run)
+    elif args.command == 'restore-marketing':
+        restore_marketing_variations(backup_dir=args.backup, dry_run=args.dry_run)
+    elif args.command == 'restore-legacy':
+        restore_legacy_content(backup_dir=args.backup, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

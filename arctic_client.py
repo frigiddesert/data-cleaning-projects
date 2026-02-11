@@ -124,6 +124,12 @@ class ArcticClient:
 
     def get_pricing_for_trip(self, trip_id: int) -> List[Dict]:
         """Get pricing levels for a specific trip type."""
+        # First try getting from triptype directly (embedded pricing)
+        trip_type = self.get_trip_type(trip_id)
+        if trip_type and trip_type.get('pricinglevels'):
+            return trip_type['pricinglevels']
+
+        # Fallback to separate pricing endpoint
         all_pricing = self.get_pricing_levels()
         return [p for p in all_pricing if p.get('parentid') == trip_id]
 
@@ -144,9 +150,18 @@ class ArcticClient:
             if amount is None:
                 continue
 
+            # Handle string amounts like "$1275.00"
+            if isinstance(amount, str):
+                amount = amount.replace('$', '').replace(',', '')
+
+            try:
+                amount = float(amount)
+            except:
+                continue
+
             entry = {
                 'name': level.get('name', 'Standard'),
-                'amount': float(amount),
+                'amount': amount,
                 'description': level.get('description', ''),
                 'show_online': level.get('showonline', True),
                 'is_default': level.get('default', False),
@@ -243,39 +258,89 @@ class ArcticClient:
                 'start_date': start_date,
                 'end_date': trip.get('end', ''),
                 'status': trip.get('status'),
-                'spots_available': trip.get('spotsavailable'),
-                'spots_total': trip.get('spotstotal'),
+                'spots_available': trip.get('remainingopenings', 0),
+                'spots_total': trip.get('openings', 0),
                 'is_private': trip.get('isprivate', False),
             })
 
         return sorted(dates, key=lambda x: x['start_date'] or '')
 
     def get_2026_schedule(self, trip_type_id: int) -> Dict:
-        """Get 2026 schedule organized by season."""
-        dates = self.get_scheduled_dates_for_trip(trip_type_id, year=2026)
+        """Get 2026 schedule organized by season. (Legacy - use get_full_schedule instead)"""
+        return self.get_full_schedule(trip_type_id)
 
-        spring = []  # Mar-May
-        fall = []    # Sep-Nov
-        other = []
+    def get_full_schedule(self, trip_type_id: int) -> Dict:
+        """Get all future dates plus past 3 months, organized by season."""
+        from datetime import datetime, timedelta
 
-        for d in dates:
-            if not d.get('start_date'):
+        today = datetime.now()
+        three_months_ago = today - timedelta(days=90)
+
+        # Build query for non-canceled trips from 3 months ago onwards
+        query_parts = [
+            f'triptypeid = {trip_type_id}',
+            'canceled = false'
+        ]
+        query = ' AND '.join(query_parts)
+
+        # Get trips
+        all_trips = []
+        start = 0
+        page_size = 100
+
+        while True:
+            params = {
+                'query': query,
+                'start': start,
+                'number': page_size
+            }
+            data = self._request('trip', params=params)
+            entries = data.get('entries', []) if isinstance(data, dict) else []
+            all_trips.extend(entries)
+
+            if len(entries) < page_size:
+                break
+            start += page_size
+
+        # Filter and organize
+        future = []
+        recent_past = []
+
+        for trip in all_trips:
+            start_date = trip.get('start', '')
+            if not start_date:
                 continue
-            month = int(d['start_date'].split('-')[1])
-            if 3 <= month <= 5:
-                spring.append(d)
-            elif 9 <= month <= 11:
-                fall.append(d)
-            else:
-                other.append(d)
+
+            try:
+                trip_date = datetime.strptime(start_date, '%Y-%m-%d')
+            except:
+                continue
+
+            trip_info = {
+                'trip_id': trip.get('id'),
+                'start_date': start_date,
+                'end_date': trip.get('end', ''),
+                'spots_available': trip.get('remainingopenings', 0),
+                'spots_total': trip.get('openings', 0),
+                'guests': trip.get('guests', 0),
+                'is_private': trip.get('isprivate', False),
+            }
+
+            if trip_date >= today:
+                future.append(trip_info)
+            elif trip_date >= three_months_ago:
+                recent_past.append(trip_info)
+
+        # Sort by date
+        future.sort(key=lambda x: x['start_date'])
+        recent_past.sort(key=lambda x: x['start_date'], reverse=True)
 
         return {
             'trip_type_id': trip_type_id,
-            'year': 2026,
-            'spring': spring,
-            'fall': fall,
-            'other': other,
-            'total': len(dates),
+            'future': future,
+            'recent_past': recent_past,
+            'total_future': len(future),
+            'total_recent': len(recent_past),
         }
 
     # ==========================================
