@@ -1,0 +1,21 @@
+name = "outline-d1-sync"
+main = "src/index.ts"
+compatibility_date = "2025-01-20"
+compatibility_flags = ["nodejs_compat"]
+
+# Cron trigger - DISABLED (free tier limit reached)
+# Called via GitHub Actions instead
+# [triggers]
+# crons = ["*/30 * * * *"]
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "rim-tours-db"
+database_id = "1875a129-913d-4799-bf51-66b3e7195808"
+
+# Environment variables (set via wrangler secret)
+# OUTLINE_API_URL - Outline API base URL
+# OUTLINE_API_KEY - Outline API token
+# OUTLINE_DAY_TOURS_DOC_ID - Day Tours folder ID
+# OUTLINE_MD_TOURS_DOC_ID - Multi-Day Tours folder ID

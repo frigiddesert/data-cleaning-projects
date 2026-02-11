@@ -1,0 +1,54 @@
+name: Outline → D1 Sync
+
+on:
+  schedule:
+    # Runs every hour at :15 past the hour
+    - cron: '15 * * * *'
+
+  workflow_dispatch:
+    # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  sync-outline-to-d1:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Trigger D1 sync
+        run: |
+          echo "🔄 Triggering Outline → D1 sync..."
+          echo "Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+
+          RESPONSE=$(curl -s -X POST https://outline-d1-sync.eric-c5f.workers.dev/api/sync-now)
+          echo "$RESPONSE" | jq '.'
+
+          # Check if sync was successful
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
+
+          if [ "$SUCCESS" = "true" ]; then
+            UPDATED=$(echo "$RESPONSE" | jq -r '.stats.updated')
+            INSERTED=$(echo "$RESPONSE" | jq -r '.stats.inserted')
+            ERRORS=$(echo "$RESPONSE" | jq -r '.stats.errors')
+
+            echo ""
+            echo "✅ Sync successful!"
+            echo "   - $INSERTED tours inserted"
+            echo "   - $UPDATED tours updated"
+            echo "   - $ERRORS errors"
+
+            if [ "$ERRORS" -gt 0 ]; then
+              echo ""
+              echo "⚠️ Warning: $ERRORS tours failed to sync"
+            fi
+          else
+            echo ""
+            echo "❌ Sync failed!"
+            exit 1
+          fi
+
+      - name: Verify sync status
+        run: |
+          echo ""
+          echo "📊 Checking sync status..."
+          curl -s https://outline-d1-sync.eric-c5f.workers.dev/api/sync-status | jq '.'
